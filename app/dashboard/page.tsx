@@ -2321,7 +2321,7 @@ export default function Dashboard() {
                               </Button>
                             </div>
                           ) : (
-                            filteredTransactions.map((transaction) => (
+                            filteredTransactions.map((transaction, index) => (
                               <div
                                 key={transaction.id}
                                 className="flex items-center justify-between px-6 py-5 theme-card-hover transition-all duration-200"
