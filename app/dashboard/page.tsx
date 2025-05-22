@@ -2246,7 +2246,7 @@ export default function Dashboard() {
                                 Add Expense
                               </Button>
                             </DialogTrigger>
-                            <DialogContent className="dialog-content">
+                            <DialogContent className="dialog-content sm:max-w-[500px]">
                               {(() => {
                                 console.log("🧠 Modal de Agregar Gasto renderizado");
                                 return null;
@@ -2255,7 +2255,7 @@ export default function Dashboard() {
                                 <DialogTitle>Add Expense</DialogTitle>
                                 <DialogDescription>Enter the details of your expense below.</DialogDescription>
                               </DialogHeader>
-                              <div className="space-y-6 py-4">
+                              <div className="space-y-6 py-4 overflow-y-auto">
                                 <div className="flex items-center gap-3 rounded-lg border bg-emerald-50/50 p-3 text-sm">
                                   <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100">
                                     <span className="text-lg">💸</span>
@@ -2275,6 +2275,7 @@ export default function Dashboard() {
                                     onChange={(e) => setNewExpense({ ...newExpense, title: e.target.value })}
                                     placeholder="ej. Cena, Supermercado, Alquiler"
                                     className="rounded-md border-muted-foreground/20 transition-all focus-visible:ring-emerald-500"
+                                    autoFocus={false}
                                   />
                                 </div>
 
