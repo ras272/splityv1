@@ -49,6 +49,7 @@
     "dotenv": "^16.5.0",
     "embla-carousel-react": "latest",
     "framer-motion": "^12.12.1",
+    "html2canvas": "^1.4.1",
     "input-otp": "latest",
     "lucide-react": "^0.454.0",
     "next": "15.2.4",

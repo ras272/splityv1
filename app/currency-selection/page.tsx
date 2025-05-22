@@ -67,87 +67,108 @@ export default function CurrencySelection() {
         throw new Error("ID de usuario no disponible");
       }
       
-      // Verificar si existe un grupo 'Personal' sin el flag is_personal
-      console.log(`Verificando si existe grupo 'Personal' para usuario ${user.id}...`)
-      const { data: existingPersonalGroup } = await supabase
+      // Buscar el grupo personal
+      console.log(`Buscando grupo personal para usuario ${user.id}...`)
+      const { data: personalGroup, error: groupError } = await supabase
         .from("groups")
-        .select("id, name, is_personal")
-        .eq("created_by", user.id)
-        .eq("name", "Personal")
-        .maybeSingle()
-        
-      if (existingPersonalGroup) {
-        console.log(`Grupo 'Personal' encontrado, id: ${existingPersonalGroup.id}, is_personal: ${existingPersonalGroup.is_personal}`)
-        
-        // Si existe pero no tiene is_personal = true, actualizarlo
-        if (existingPersonalGroup.is_personal !== true) {
-          console.log(`Actualizando flag is_personal para grupo ${existingPersonalGroup.id}`)
-          await supabase
-            .from("groups")
-            .update({ is_personal: true })
-            .eq("created_by", user.id)
-            .eq("name", "Personal")
-        }
-      } else {
-        console.log("Grupo personal no encontrado para este usuario")
-      }
-      
-      // Buscar el grupo personal con una consulta explícita
-      console.log("Buscando grupo personal para usuario:", user.id)
-      
-      const { data: group, error } = await supabase
-        .from("groups")
-        .select("*")
+        .select()
         .eq("created_by", user.id)
         .eq("is_personal", true)
-        .maybeSingle()
+        .maybeSingle();
+
+      if (groupError) {
+        console.error("Error al buscar grupo personal:", groupError);
+        throw groupError;
+      }
+
+      // Si no existe el grupo personal, crearlo
+      let groupId: string;
       
-      console.log("Resultado de búsqueda de grupo personal:", { group, error })
-      
-      if (!group) {
-        console.error("❌ Grupo personal no encontrado para este usuario")
-        toast({
-          title: "Error",
-          description: "No se pudo encontrar tu grupo personal. Por favor, contacta a soporte.",
-          variant: "destructive",
-        })
-        setLoading(false)
-        return
+      if (!personalGroup) {
+        console.log("No existe grupo personal. Procediendo a crearlo...");
+        const { data: newGroup, error: createError } = await supabase
+          .from("groups")
+          .insert({
+            name: "Personal",
+            description: "Grupo personal",
+            emoji: "👤",
+            color: "gray",
+            created_by: user.id,
+            currency: selectedCurrency,
+            is_personal: true,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          } as any)
+          .select()
+          .single();
+
+        if (createError || !newGroup) {
+          console.error("❌ Error al crear grupo personal:", createError);
+          throw createError || new Error("No se pudo crear el grupo personal");
+        }
+
+        console.log("✅ Grupo personal creado con ID:", newGroup.id);
+        groupId = newGroup.id;
+        
+        // Agregar al usuario como miembro admin del grupo
+        const { error: memberError } = await supabase
+          .from("group_members")
+          .insert({
+            group_id: groupId,
+            user_id: user.id,
+            role: "admin",
+            created_at: new Date().toISOString()
+          } as any);
+
+        if (memberError) {
+          console.error("Error agregando usuario al grupo:", memberError);
+          // Borrar el grupo si falló agregar al miembro
+          await supabase.from("groups").delete().eq("id", groupId);
+          throw memberError;
+        }
+      } else {
+        groupId = personalGroup.id;
       }
       
-      console.log(`Grupo personal encontrado, ID: ${group.id}, creado: ${group.created_at}`)
-      
-      // Actualizar el perfil primero
-      console.log(`Actualizando moneda del perfil a ${selectedCurrency}`)
+      // Actualizar el perfil del usuario
+      console.log(`Actualizando moneda del perfil a ${selectedCurrency}`);
       const { error: profileError } = await supabase
         .from("profiles")
-        .update({ default_currency: selectedCurrency })
-        .eq("id", user.id)
+        .update({
+          default_currency: selectedCurrency,
+          updated_at: new Date().toISOString()
+        } as any)
+        .eq("id", user.id);
 
       if (profileError) {
-        console.error("Error actualizando moneda del perfil:", profileError)
-        throw profileError
+        console.error("Error actualizando moneda del perfil:", profileError);
+        throw profileError;
       }
       
-      console.log("Perfil actualizado correctamente")
+      console.log("Perfil actualizado correctamente");
 
-      // Ahora actualizar el grupo personal
-      console.log(`Actualizando moneda del grupo personal ${group.id} a ${selectedCurrency}`)
-      const { error: updateGroupError } = await supabase
-        .from("groups")
-        .update({ currency: selectedCurrency })
-        .eq("id", group.id)
+      // Actualizar la moneda del grupo personal si ya existía
+      if (personalGroup) {
+        console.log(`Actualizando moneda del grupo personal ${groupId} a ${selectedCurrency}`);
+        const { error: updateGroupError } = await supabase
+          .from("groups")
+          .update({ 
+            currency: selectedCurrency,
+            updated_at: new Date().toISOString()
+          } as any)
+          .eq("id", groupId);
 
-      if (updateGroupError) {
-        console.error("Error actualizando moneda del grupo:", updateGroupError)
-        throw updateGroupError
+        if (updateGroupError) {
+          console.error("Error actualizando moneda del grupo:", updateGroupError);
+          throw updateGroupError;
+        }
+        
+        console.log("Grupo personal actualizado correctamente");
       }
-      
-      console.log("Grupo personal actualizado correctamente")
       
       // Todo salió bien, redirigir al dashboard
-      console.log("Redirigiendo al dashboard")
-      router.push("/dashboard")
+      console.log("Redirigiendo al dashboard");
+      router.push("/dashboard");
     } catch (error: any) {
       console.error("Error detallado en la configuración de moneda:", {
         error,

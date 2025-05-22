@@ -1,11 +1,11 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { createClient } from "@/utils/supabase/client"
 import Header from "./header"
 import { motion, AnimatePresence } from "framer-motion"
 import { DialogTrigger } from "@/components/ui/dialog"
-import { ArrowUpRight, ChevronLeft, Plus, RefreshCw, Zap, Info, Trash2, Pencil, Check } from "lucide-react"
+import { ArrowUpRight, ChevronLeft, Plus, RefreshCw, Zap, Info, Trash2, Pencil, Check, Image } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -29,6 +29,11 @@ import { useRouter } from "next/navigation"
 import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog"
 import { createSettlementNotification } from "@/utils/notifications"
 import { CURRENCY_OPTIONS, formatAmount } from "@/utils/currency"
+import { ReceiptCard } from "@/components/ui/ReceiptCard"
+import { ReceiptPreviewModal } from "@/components/ui/ReceiptPreviewModal"
+import html2canvas from "html2canvas"
+import { ReactionPicker } from "@/components/ui/ReactionPicker"
+import { TransactionReactions } from "@/components/ui/TransactionReactions"
 
 // Types
 type TransactionType = "expense" | "loan" | "settlement"
@@ -40,7 +45,7 @@ interface Transaction {
   amount: number
   date: Date
   paidBy: string
-  paid_by?: string
+  paid_by: string
   splitBetween?: string[]
   note?: string
   tag?: string
@@ -51,7 +56,19 @@ interface Transaction {
   categoryEmoji?: string
   categoryColor?: string
   created_by?: string
-  profiles?: any
+  profiles?: {
+    id: string
+    full_name?: string
+    avatar_url?: string
+  }
+  groupName?: string
+  groupEmoji?: string
+  currency?: string
+  paidByUser?: {
+    id: string
+    full_name: string
+    avatar_url?: string
+  }
 }
 
 interface TransactionSplit {
@@ -290,8 +307,26 @@ export default function Dashboard() {
   // Agregar este estado para manejar los miembros del grupo
   const [groupMembers, setGroupMembers] = useState<GroupMember[]>([]);
 
+  const [selectedReceipt, setSelectedReceipt] = useState<Transaction | null>(null)
+  const [receiptImage, setReceiptImage] = useState<string>("")
+  const receiptRef = useRef<HTMLDivElement>(null)
+
+  // Agregar el estado para el preview del recibo
+  const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+
   // Check if user is authenticated
   useEffect(() => {
+    // Limpiar el almacenamiento local de tokens antiguos
+    if (typeof window !== 'undefined') {
+      const keys = Object.keys(localStorage);
+      keys.forEach(key => {
+        if (key.includes('auth.token')) {
+          localStorage.removeItem(key);
+        }
+      });
+    }
+
+    // Continuar con la carga normal
     async function getUser() {
       setLoading(true)
       try {
@@ -365,23 +400,10 @@ export default function Dashboard() {
 
   // Modificar el useEffect de fetchGroupMembers
   useEffect(() => {
-    console.log("🔥 useEffect ejecutado para fetchGroupMembers");
-    console.log("📦 selectedGroupId actual:", selectedGroupId);
-    console.log("👤 Usuario actual:", user?.id);
-    console.log("🔓 Modal abierto:", showAddExpenseDialog);
-
     const fetchGroupMembers = async () => {
       if (!selectedGroupId || !user) {
-        console.warn("⚠️ No hay selectedGroupId o user:", { selectedGroupId, userId: user?.id });
         return;
       }
-      
-      if (!showAddExpenseDialog) {
-        console.log("🔒 Modal cerrado, no se cargan miembros");
-        return;
-      }
-      
-      console.log("🚀 Ejecutando fetchGroupMembers, groupId:", selectedGroupId);
       
       try {
         // Primero obtener información del grupo para saber quién es el creador
@@ -443,7 +465,7 @@ export default function Dashboard() {
         })));
 
         // Verificar si el creador está en el grupo
-        const creatorInGroup = members?.some(m => m.user_id === groupCreatorData?.created_by);
+        const creatorInGroup = members?.some((m: { user_id: string }) => m.user_id === groupCreatorData?.created_by);
         console.log('👑 ¿Creador en grupo?:', {
           creator_id: groupCreatorData?.created_by,
           is_in_group: creatorInGroup
@@ -682,6 +704,19 @@ export default function Dashboard() {
     setIsLoadingTransactions(true);
     
     try {
+      // Primero obtener los perfiles de todos los usuarios involucrados
+      const { data: profiles, error: profilesError } = await supabase
+        .from("profiles")
+        .select("id, full_name, avatar_url");
+
+      if (profilesError) throw profilesError;
+
+      // Crear un mapa de perfiles para acceso rápido
+      const profilesMap = (profiles || []).reduce((acc: any, profile: any) => {
+        acc[profile.id] = profile;
+        return acc;
+      }, {});
+
       const { data, error } = await supabase
         .from("transactions")
         .select(`
@@ -690,7 +725,7 @@ export default function Dashboard() {
             id, name, emoji, color
           ),
           profiles!transactions_paid_by_fkey (
-            id, full_name
+            id, full_name, avatar_url
           )
         `)
         .eq("group_id", selectedGroupId)
@@ -709,7 +744,7 @@ export default function Dashboard() {
           (transaction.paid_by === user.id ? "You" : "Unknown"),
         paid_by: transaction.paid_by,
         splitBetween: transaction.split_between?.map((id: string) => 
-          id === user.id ? "You" : userProfiles[id]?.name || "Unknown"
+          id === user.id ? "You" : profilesMap[id]?.full_name || "Unknown"
         ),
         note: transaction.note,
         tag: transaction.tag,
@@ -719,7 +754,11 @@ export default function Dashboard() {
         categoryEmoji: transaction.categories?.emoji,
         categoryColor: transaction.categories?.color,
         created_by: transaction.created_by,
-        profiles: transaction.profiles
+        profiles: {
+          id: transaction.profiles?.id,
+          full_name: transaction.profiles?.full_name,
+          avatar_url: transaction.profiles?.avatar_url
+        }
       }));
 
       setTransactions(formattedTransactions);
@@ -958,9 +997,10 @@ export default function Dashboard() {
   const budgetPercentage = monthlyBudget > 0 ? Math.round((totalSpent / monthlyBudget) * 100) : 0
 
   // Cálculo real del balance basado en las transacciones
-  const totalPaidByUser = filteredTransactions
-    .filter(t => t.type === "expense" && t.paid_by === user?.id)
-    .reduce((sum, t) => sum + Number(t.amount), 0);
+  const totalOwedToUser = filteredTransactions
+    .filter(t => t.type === "expense" && t.paid_by === user?.id && t.splits?.length > 0)
+    .flatMap(t => t.splits.filter(s => s.user_id !== user?.id))
+    .reduce((sum, s) => sum + Number(s.amount), 0);
     
   // Calcular cuánto le corresponde pagar al usuario actual (de sus transaction_splits)
   const userSplitAmount = filteredTransactions
@@ -970,7 +1010,7 @@ export default function Dashboard() {
   
   // Log para depuración
   console.log("User ID:", user?.id);
-  console.log("Total paid by user:", totalPaidByUser);
+  console.log("Total owed to user:", totalOwedToUser);
   console.log("User split amount:", userSplitAmount);
   console.log("Filtered transactions:", filteredTransactions);
 
@@ -985,9 +1025,10 @@ export default function Dashboard() {
         // Que el usuario actual no haya pagado
         if (t.paid_by === user?.id) return false;
         
-        // Que el usuario esté en split_between
+        // Que el usuario esté en split_between y que haya más de una persona
         const userFullName = user?.user_metadata?.full_name || "";
         return t.splitBetween && 
+          t.splitBetween.length > 1 &&
           (t.splitBetween.includes(userFullName) || 
            t.splitBetween.includes("You") ||
            // Si hay un nombre parcial que coincida (por ej. "Jack" vs "Jack Green")
@@ -1004,7 +1045,7 @@ export default function Dashboard() {
   }
     
   // Balance = pagado - lo que le tocaba pagar
-  const realBalance = totalPaidByUser - (userSplitAmount || calculatedSplitAmount);
+  const realBalance = totalOwedToUser - (userSplitAmount || calculatedSplitAmount);
   console.log("Real balance:", realBalance);
   
   // Usamos realBalance como balance principal
@@ -1071,8 +1112,11 @@ export default function Dashboard() {
     }
 
     try {
-      // Crear el array final de split_between incluyendo al pagador
-      const finalSplitBetween = [newExpense.paidBy, ...newExpense.splitWith];
+      // Solo incluir split_between si hay otros usuarios seleccionados
+      const finalSplitBetween = newExpense.splitWith.length > 0
+        ? [newExpense.paidBy, ...newExpense.splitWith]
+        : [];
+      
       console.log("Final split between:", finalSplitBetween);
 
       const { data: newTransaction, error } = await supabase
@@ -1106,31 +1150,35 @@ export default function Dashboard() {
 
       if (error) throw error
 
-      // Calcular el monto por persona
-      const splitPeople = newExpense.splitWith.length + 1;
-      const amountPerPerson = amount / splitPeople;
+      let splits = [];
+      
+      // Solo crear splits si hay otros usuarios seleccionados
+      if (newExpense.splitWith.length > 0) {
+        const splitPeople = newExpense.splitWith.length + 1;
+        const amountPerPerson = amount / splitPeople;
 
-      // Crear los registros de división de gastos
-      const splits = [
-        {
-          transaction_id: newTransaction.id,
-          user_id: newExpense.paidBy,
-          amount: amountPerPerson
-        },
-        ...newExpense.splitWith.map(userId => ({
-          transaction_id: newTransaction.id,
-          user_id: userId,
-          amount: amountPerPerson
-        }))
-      ];
+        splits = [
+          {
+            transaction_id: newTransaction.id,
+            user_id: newExpense.paidBy,
+            amount: amountPerPerson
+          },
+          ...newExpense.splitWith.map(userId => ({
+            transaction_id: newTransaction.id,
+            user_id: userId,
+            amount: amountPerPerson
+          }))
+        ];
 
-      const { error: splitsError } = await supabase
-        .from('transaction_splits')
-        .insert(splits);
+        // Solo insertar splits si hay splits para crear
+        const { error: splitsError } = await supabase
+          .from('transaction_splits')
+          .insert(splits);
 
-      if (splitsError) throw splitsError;
+        if (splitsError) throw splitsError;
+      }
 
-      // Formatear la nueva transacción con la información de la categoría
+      // Formatear la nueva transacción
       const formattedTransaction = {
         id: newTransaction.id,
         title: newTransaction.title,
@@ -1138,7 +1186,7 @@ export default function Dashboard() {
         amount: newTransaction.amount,
         date: new Date(newTransaction.created_at),
         paidBy: newTransaction.profiles?.full_name || "You",
-        paid_by: newTransaction.paid_by,
+        paid_by: newTransaction.paid_by || user.id,
         splitBetween: newTransaction.split_between?.map((id: string) => 
           id === user.id ? "You" : 
           userProfiles[id]?.name || id
@@ -1154,28 +1202,26 @@ export default function Dashboard() {
         created_by: user.id,
       }
 
-      // Actualizar el estado local con la nueva transacción
+      // Actualizar el estado local
       setTransactions(prevTransactions => [formattedTransaction, ...prevTransactions])
       setShowAddExpenseDialog(false)
 
-      // Calculate split amount if expense is split
+      // Mostrar mensaje según si es gasto compartido o personal
       if (newExpense.splitWith.length > 0) {
+        const amountPerPerson = amount / (newExpense.splitWith.length + 1);
         setSplitAmount(amountPerPerson)
 
-        // Show toast with split information
         toast({
-          title: "✅ Gasto agregado con éxito",
+          title: "✅ Gasto compartido agregado",
           description: `Cada uno paga: ${formatCurrency(amountPerPerson, newExpense.groupId)}`,
           duration: 3000,
         })
       } else {
-        // Show success animation
         setShowSuccessAnimation(true)
         setTimeout(() => setShowSuccessAnimation(false), 2000)
 
-        // Show toast
         toast({
-          title: "✅ Gasto agregado con éxito",
+          title: "✅ Gasto personal registrado",
           description: `Tu gasto de ${formatCurrency(amount, newExpense.groupId)} ha sido añadido al historial`,
           duration: 3000,
         })
@@ -1266,6 +1312,7 @@ export default function Dashboard() {
         amount: newTransaction.amount,
         date: new Date(newTransaction.created_at),
         paidBy: newTransaction.paid_by,
+        paid_by: newTransaction.paid_by || user.id,
         splitBetween: newTransaction.split_between,
         note: newTransaction.note,
         tag: newTransaction.tag,
@@ -1336,6 +1383,7 @@ export default function Dashboard() {
         amount: newTransaction.amount,
         date: new Date(newTransaction.created_at),
         paidBy: newTransaction.paid_by,
+        paid_by: newTransaction.paid_by || user.id,
         splitBetween: newTransaction.split_between,
         note: newTransaction.note,
         tag: newTransaction.tag,
@@ -1663,6 +1711,140 @@ export default function Dashboard() {
     console.log("Grupo seleccionado:", selectedGroupId)
   }, [transactions, selectedGroupId])
 
+  // Función para generar el recibo usando html2canvas
+  const generateReceipt = async (transaction: Transaction): Promise<string> => {
+    if (!receiptRef.current) return "";
+    
+    const receiptElement = receiptRef.current;
+    const avatarImg = receiptElement?.querySelector("img");
+
+    // Función que realiza la captura
+    const capture = () => {
+      return html2canvas(receiptElement, {
+        useCORS: true,
+        backgroundColor: null,
+        scale: 2,
+      }).then(canvas => canvas.toDataURL("image/png"));
+    };
+
+    // Si hay una imagen de avatar, esperar a que cargue
+    if (avatarImg && !avatarImg.complete) {
+      return new Promise((resolve) => {
+        avatarImg.onload = async () => {
+          // Dar un pequeño tiempo extra después de la carga
+          await new Promise(r => setTimeout(r, 100));
+          resolve(capture());
+        };
+      });
+    }
+
+    // Si no hay avatar o ya está cargado, dar un pequeño delay y capturar
+    await new Promise(resolve => setTimeout(resolve, 200));
+    return capture();
+  };
+
+  const handleGenerateReceipt = async (transaction: Transaction) => {
+    try {
+      // Log detallado de la transacción original
+      console.log("🔍 Transacción original:", {
+        id: transaction.id,
+        paid_by: transaction.paid_by,
+        paidBy: transaction.paidBy,
+        profiles: transaction.profiles
+      });
+
+      // Log del estado inicial del avatar
+      console.log("🖼️ Estado inicial del avatar:", {
+        from_profiles: transaction.profiles?.avatar_url,
+        from_paidBy: transaction.paidByUser?.avatar_url
+      });
+
+      if (!transaction.paid_by) {
+        throw new Error("No se encontró el ID del pagador");
+      }
+
+      // Obtener el perfil del usuario que pagó
+      const { data: paidByProfile, error: profileError } = await supabase
+        .from("profiles")
+        .select("id, full_name, avatar_url")
+        .eq("id", transaction.paid_by)
+        .single();
+
+      if (profileError) throw profileError;
+
+      // Log del perfil obtenido con detalles del avatar
+      console.log("👤 Perfil del pagador:", {
+        ...paidByProfile,
+        avatar_url_exists: !!paidByProfile?.avatar_url,
+        avatar_url_length: paidByProfile?.avatar_url?.length
+      });
+
+      // Preparar los datos para el recibo
+      const receiptData = {
+        ...transaction,
+        paidByUser: {
+          id: paidByProfile?.id,
+          full_name: paidByProfile?.full_name,
+          avatar_url: paidByProfile?.avatar_url
+        }
+      };
+
+      // Log detallado del estado final del avatar
+      console.log("📝 Estado final del avatar:", {
+        original_avatar: transaction.profiles?.avatar_url,
+        fetched_avatar: paidByProfile?.avatar_url,
+        final_avatar: receiptData.paidByUser?.avatar_url,
+        is_url_valid: receiptData.paidByUser?.avatar_url?.startsWith('http')
+      });
+
+      // Establecer el recibo seleccionado
+      setSelectedReceipt(receiptData);
+
+      // Esperar a que el estado se actualice
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Log justo antes de generar el recibo
+      console.log("🎨 Datos justo antes de generar recibo:", {
+        selectedReceipt: {
+          ...selectedReceipt,
+          paidByUser: {
+            ...selectedReceipt?.paidByUser,
+            avatar_url_exists: !!selectedReceipt?.paidByUser?.avatar_url
+          }
+        }
+      });
+
+      // Generar el recibo
+      const receipt = await generateReceipt(receiptData);
+      
+      // Mostrar el recibo
+      setReceiptImage(receipt);
+      setShowReceiptPreview(true);
+    } catch (error) {
+      console.error("Error generating receipt:", error);
+      toast({
+        title: "Error al generar el comprobante",
+        description: "Hubo un problema al generar el comprobante. Por favor, intenta de nuevo.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDownloadReceipt = () => {
+    if (!receiptImage) return
+    
+    const link = document.createElement("a")
+    link.href = receiptImage
+    link.download = `splity-comprobante-${Date.now()}.png`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    
+    toast({
+      title: "¡Listo!",
+      description: "Comprobante descargado correctamente",
+    })
+  }
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -1685,6 +1867,154 @@ export default function Dashboard() {
       </div>
     )
   }
+
+  // Modificar la función que renderiza cada transacción
+  const renderTransaction = (transaction: Transaction) => {
+    // Detectar si es un gasto personal
+    const isPersonalExpense = 
+      Array.isArray(transaction.splitBetween) &&
+      transaction.splitBetween.length === 0 &&  // Cambio: length === 0 para gastos personales
+      transaction.paid_by === user?.id;
+
+    // Log para diagnóstico
+    console.log("🔍 Diagnóstico de gasto personal:", {
+      transactionId: transaction.id,
+      title: transaction.title,
+      splitBetween: transaction.splitBetween,
+      isSplitBetweenArray: Array.isArray(transaction.splitBetween),
+      splitBetweenLength: transaction.splitBetween?.length,
+      paidBy: transaction.paid_by,
+      userId: user?.id,
+      isPersonalExpense
+    });
+
+    return (
+      <div 
+        key={transaction.id} 
+        className={`group flex flex-col px-4 py-3 theme-card-hover transition-all duration-200 ${
+          isPersonalExpense ? 'bg-gray-50/50 dark:bg-gray-800/20' : ''
+        }`}
+      >
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 sm:gap-2">
+          <div className="flex items-start gap-4 min-w-0">
+            {getTransactionIcon(transaction)}
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-medium break-words">{transaction.title}</h3>
+                <div className="flex flex-wrap gap-2">
+                  {transaction.tag && (
+                    <Badge variant="outline" className="text-xs whitespace-normal">
+                      {transaction.tag}
+                    </Badge>
+                  )}
+                  {transaction.category && (
+                    <Badge variant="outline" className="text-xs bg-gray-50 whitespace-normal">
+                      {transaction.categoryEmoji && (
+                        <span className="mr-1">{transaction.categoryEmoji}</span>
+                      )}
+                      {transaction.category}
+                    </Badge>
+                  )}
+                  {isPersonalExpense && (
+                    <Badge variant="outline" className="text-xs bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 whitespace-normal">
+                      🔒 Solo vos
+                    </Badge>
+                  )}
+                </div>
+              </div>
+              {transaction.type === "expense" && (
+                <p className="text-sm text-muted-foreground break-words">
+                  {isPersonalExpense ? (
+                    "Gasto personal (no compartido)"
+                  ) : (
+                    <>
+                      Pagado por{" "}
+                      <strong className="font-medium">
+                        {transaction.paid_by === user?.id 
+                          ? "Vos" 
+                          : transaction.profiles?.full_name ?? transaction.paid_by}
+                      </strong>
+                      {selectedGroupId !== "personal" && transaction.splitBetween && transaction.splitBetween.length > 1 && (
+                        <>
+                          • Dividido entre {transaction.splitBetween.map(id => id === user?.id ? "Vos" : id).join(", ")}
+                        </>
+                      )}
+                    </>
+                  )}
+                </p>
+              )}
+              {transaction.note && (
+                <p className="text-xs text-muted-foreground break-words">Nota: {transaction.note}</p>
+              )}
+              <div className="mt-1 flex items-center gap-2">
+                {transaction.profiles?.avatar_url ? (
+                  <img 
+                    src={transaction.profiles.avatar_url} 
+                    alt={transaction.profiles.full_name || 'Usuario'} 
+                    className="h-5 w-5 rounded-full object-cover flex-shrink-0"
+                  />
+                ) : transaction.paidBy === "Vos" ? (
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 text-[10px] flex-shrink-0">
+                    V
+                  </span>
+                ) : (
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 text-[10px] flex-shrink-0">
+                    {transaction.profiles?.full_name?.charAt(0).toUpperCase() || transaction.paidBy.charAt(0).toUpperCase()}
+                  </span>
+                )}
+                <span className="text-xs text-muted-foreground">{formatDate(transaction.date)}</span>
+              </div>
+            </div>
+          </div>
+          
+          <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 mt-2 sm:mt-0">
+            <div className="flex items-center gap-3">
+              <p className="font-medium text-emerald-600 whitespace-nowrap">{formatCurrency(transaction.amount, transaction.groupId)}</p>
+              <div className="flex items-center gap-1">
+                {transaction.created_by === user?.id && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                    onClick={() => setShowDeleteConfirm(transaction.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    <span className="sr-only">Eliminar transacción</span>
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 transition-colors"
+                  onClick={() => handleGenerateReceipt(transaction)}
+                >
+                  <Image className="h-4 w-4" />
+                  <span className="sr-only">Compartir como imagen</span>
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 min-h-[28px]">
+              <TransactionReactions 
+                transactionId={transaction.id} 
+                currentUserId={user?.id || ""}
+              />
+              <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                <ReactionPicker
+                  transactionId={transaction.id}
+                  currentUserId={user?.id || ""}
+                  onReactionChange={() => {
+                    const updatedTransactions = [...transactions];
+                    setTransactions(updatedTransactions);
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <>
@@ -2288,25 +2618,8 @@ export default function Dashboard() {
                         </div>
                       </CardHeader>
                       <CardContent>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                          {isLoadingTransactions ? (
-                            <div className="p-6">
-                              <div className="space-y-4">
-                                {[1, 2, 3, 4].map((i) => (
-                                  <div key={i} className="flex items-center justify-between animate-pulse">
-                                    <div className="flex items-center gap-4">
-                                      <div className="h-10 w-10 rounded-full bg-muted"></div>
-                                      <div>
-                                        <div className="h-4 w-32 bg-muted rounded mb-2"></div>
-                                        <div className="h-3 w-48 bg-muted/70 rounded"></div>
-                                      </div>
-                                    </div>
-                                    <div className="h-4 w-12 bg-muted rounded"></div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ) : filteredTransactions.length === 0 ? (
+                        <div className="flex flex-col gap-4">
+                          {filteredTransactions.length === 0 ? (
                             <div className="flex flex-col items-center justify-center py-12 text-center">
                               <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted mb-4">
                                 <span className="text-3xl">{getGroupEmoji(selectedGroupId, groups)}</span>
@@ -2321,103 +2634,14 @@ export default function Dashboard() {
                               </Button>
                             </div>
                           ) : (
-                            filteredTransactions.map((transaction, index) => (
-                              <div
-                                key={transaction.id}
-                                className="flex items-center justify-between px-6 py-5 theme-card-hover transition-all duration-200"
-                                style={{
-                                  animationName: "fadeInUp",
-                                  animationDuration: "0.5s",
-                                  animationTimingFunction: "ease",
-                                  animationFillMode: "forwards",
-                                  animationDelay: `${index * 50}ms`,
-                                }}
-                              >
-                                <div className="flex items-center gap-4">
-                                  {getTransactionIcon(transaction)}
-                                  <div>
-                                    <div className="flex items-center gap-2">
-                                      <h3 className="font-medium">{transaction.title}</h3>
-                                      {transaction.tag && (
-                                        <Badge variant="outline" className="text-xs">
-                                          {transaction.tag}
-                                        </Badge>
-                                      )}
-                                      {transaction.category && (
-                                        <Badge variant="outline" className="text-xs bg-gray-50">
-                                          {transaction.categoryEmoji && (
-                                            <span className="mr-1">{transaction.categoryEmoji}</span>
-                                          )}
-                                          {transaction.category}
-                                        </Badge>
-                                      )}
-                                    </div>
-                                    {transaction.type === "loan" && (
-                                      <p className="text-sm text-muted-foreground">{transaction.paidBy} loaned You • Loan</p>
-                                    )}
-                                    {transaction.type === "settlement" && (
-                                      <p className="text-sm text-muted-foreground">
-                                        You paid {transaction.paidBy} • Settlement
-                                      </p>
-                                    )}
-                                    {transaction.type === "expense" && (
-                                      <p className="text-sm text-muted-foreground">
-                                        Paid by{" "}
-                                        <strong className="font-medium">
-                                          {transaction.paid_by === user?.id 
-                                            ? "You" 
-                                            : transaction.profiles?.full_name ?? transaction.paid_by}
-                                        </strong>
-                                        {selectedGroupId !== "personal" && transaction.splitBetween && transaction.splitBetween.length > 1 && (
-                                          <>
-                                            • Split between {transaction.splitBetween.map(id => id === user?.id ? "You" : id).join(", ")}
-                                          </>
-                                        )}
-                                      </p>
-                                    )}
-                                    {transaction.note && (
-                                      <p className="text-xs text-muted-foreground">Note: {transaction.note}</p>
-                                    )}
-                                    <div className="mt-1 flex items-center gap-2">
-                                      {transaction.paidBy === "You" ? (
-                                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 text-[10px]">
-                                          Y
-                                        </span>
-                                      ) : transaction.paidBy === "Taylor" ? (
-                                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 text-[10px]">
-                                          T
-                                        </span>
-                                      ) : (
-                                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 text-[10px]">
-                                          A
-                                        </span>
-                                      )}
-                                      <span className="text-xs text-muted-foreground">{formatDate(transaction.date)}</span>
-                                    </div>
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <p className="font-medium text-emerald-600">{formatCurrency(transaction.amount, transaction.groupId)}</p>
-                                  {transaction.created_by === user?.id && (
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-8 w-8 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                                      onClick={() => setShowDeleteConfirm(transaction.id)}
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                      <span className="sr-only">Eliminar transacción</span>
-                                    </Button>
-                                  )}
-                                </div>
-                              </div>
-                            ))
+                            filteredTransactions.map((transaction) => renderTransaction(transaction))
                           )}
                         </div>
                       </CardContent>
                     </Card>
 
                     {/* Your Balance Card with theme color */}
+                    {selectedGroup?.name !== "Personal" && (
                     <Card className="mb-6 theme-card transition-all duration-300">
                       <CardHeader className="flex flex-row items-center justify-between pb-2 theme-border-left pl-6">
                         <CardTitle className="text-xl theme-text">Your Balance</CardTitle>
@@ -2464,6 +2688,7 @@ export default function Dashboard() {
                         </div>
                       </CardContent>
                     </Card>
+                    )}
 
                     {/* Transaction History */}
                     <Card className="mb-6">
@@ -3075,11 +3300,43 @@ export default function Dashboard() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Contenedor oculto para el recibo */}
+        <div className="fixed left-[-9999px]" ref={receiptRef}>
+          {selectedReceipt && (
+            <ReceiptCard
+              transaction={{
+                title: selectedReceipt.title,
+                amount: selectedReceipt.amount,
+                date: selectedReceipt.date,
+                paidBy: selectedReceipt.paidByUser?.full_name || selectedReceipt.paidBy,
+                paidByUser: selectedReceipt.paidByUser,
+                groupId: selectedReceipt.groupId,
+                groupName: groups.find(g => g.id === selectedReceipt.groupId)?.name,
+                groupEmoji: groups.find(g => g.id === selectedReceipt.groupId)?.emoji,
+                currency: groups.find(g => g.id === selectedReceipt.groupId)?.currency || 'PYG',
+                category: selectedReceipt.category,
+                categoryEmoji: selectedReceipt.categoryEmoji,
+                splitBetween: selectedReceipt.splitBetween
+              }}
+            />
+          )}
+        </div>
+
+        {/* Modal de previsualización */}
+        <ReceiptPreviewModal
+          isOpen={!!receiptImage}
+          onClose={() => {
+            setReceiptImage("")
+            setSelectedReceipt(null)
+          }}
+          imageUrl={receiptImage}
+          onDownload={handleDownloadReceipt}
+        />
       </div>
     </>
   )
 }
-
 const people = [
   {
     id: "1",
@@ -3092,4 +3349,6 @@ const people = [
     initials: "T",
   },
 ]
+
+
 
